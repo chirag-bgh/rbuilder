@@ -72,7 +72,7 @@ pub fn run_sim_worker<DB: Database + Clone + Send + 'static>(
             let start_time = Instant::now();
             let mut block_state = BlockState::new(&state_provider).with_cached_reads(cached_reads);
             let sim_result = simulate_order(
-                task.parents.clone(),
+                &mut task.parents.clone(),
                 task.order,
                 &current_sim_context.block_ctx,
                 &mut block_state,

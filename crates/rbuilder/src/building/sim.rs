@@ -7,7 +7,9 @@ use crate::{
         create_payout_tx, BlockBuildingContext, BlockState, BundleErr, CriticalCommitOrderError,
         InvalidTransaction, TransactionErr,
     },
-    primitives::{Order, OrderId, SimValue, SimulatedOrder},
+    primitives::{
+        MempoolTx, Order, OrderId, SimValue, SimulatedOrder, TransactionSignedEcRecoveredWithBlobs,
+    },
     utils::{NonceCache, NonceCacheRef},
 };
 use ahash::{HashMap, HashSet};
@@ -351,7 +353,7 @@ pub fn simulate_all_orders_with_sim_tree<DB: Database + Clone>(
             let mut block_state = BlockState::new(&state_for_sim)
                 .with_cached_reads(cache_reads.take().unwrap_or_default());
             let sim_result = simulate_order(
-                sim_task.parents.clone(),
+                &mut sim_task.parents.clone(),
                 sim_task.order.clone(),
                 ctx,
                 &mut block_state,
@@ -399,7 +401,7 @@ pub fn simulate_all_orders_with_sim_tree<DB: Database + Clone>(
 
 /// Prepares context (fork + tracer) and calls simulate_order_using_fork
 pub fn simulate_order(
-    parent_orders: Vec<Order>,
+    parent_orders: &mut Vec<Order>,
     order: Order,
     ctx: &BlockBuildingContext,
     state: &mut BlockState,
@@ -408,46 +410,76 @@ pub fn simulate_order(
     let mut fork = PartialBlockFork::new(state).with_tracer(&mut tracer);
     let rollback_point = fork.rollback_point();
     let order_copy = order.clone();
-    let sim_res = simulate_order_using_fork(parent_orders, order, ctx, &mut fork);
+    let sim_res = simulate_order_using_fork(parent_orders, order.clone(), ctx, &mut fork);
     fork.rollback(rollback_point);
     let sim_res = sim_res?;
-    if let OrderSimResult::Failed(err) = &sim_res {
-        let err_copy = err.clone();
-        tracing::trace!("Order simulation failed: {}", err);
-        match err {
-            OrderErr::Bundle(BundleErr::InvalidTransaction(_, transaction_err))
-            | OrderErr::Transaction(transaction_err) => {
-                // TODO: add share bundle case
-                if let TransactionErr::InvalidTransaction(invalid_transaction) = transaction_err {
-                    if let InvalidTransaction::LackOfFundForMaxFee { fee, balance } =
-                        invalid_transaction
+
+    let sim_res = match &sim_res {
+        OrderSimResult::Success(_, _) => sim_res,
+        OrderSimResult::Failed(err) => {
+            let err_copy = err.clone();
+            tracing::trace!("Order simulation failed: {}", err);
+            match err {
+                OrderErr::Bundle(BundleErr::InvalidTransaction(_, transaction_err))
+                | OrderErr::Transaction(transaction_err) => {
+                    // TODO: add share bundle case
+                    if let TransactionErr::InvalidTransaction(invalid_transaction) = transaction_err
                     {
-                        let balance_needed = **fee - **balance;
+                        if let InvalidTransaction::LackOfFundForMaxFee { fee, balance } =
+                            invalid_transaction
+                        {
+                            let balance_needed = **fee - **balance;
 
-                        tracing::trace!("Order failed due to lack of funds for max fee. Attempting to sponsor. Fee: {}, Balance: {}, Sponsor fee: {}", fee, balance, balance_needed);
+                            tracing::trace!("Order failed due to lack of funds for max fee. Attempting to sponsor. Fee: {}, Balance: {}, Sponsor fee: {}", fee, balance, balance_needed);
 
-                        let nonce = state.nonce(ctx.builder_signer.as_ref().unwrap().address)?;
-                        let signer = get_tx_signer(order_copy, err_copy);
+                            let nonce =
+                                state.nonce(ctx.builder_signer.as_ref().unwrap().address)?;
+                            let signer = get_tx_signer(order_copy, err_copy);
 
-                        let builder_signer = ctx.builder_signer.as_ref().unwrap();
-                        let sponsor_tx = create_payout_tx(
-                            &ctx.chain_spec,
-                            ctx.block_env.basefee,
-                            builder_signer,
-                            nonce,
-                            signer.unwrap(),
-                            21000,
-                            balance_needed.to(),
-                        );
+                            let builder_signer = ctx.builder_signer.as_ref().unwrap();
+                            let sponsor_tx = create_payout_tx(
+                                &ctx.chain_spec,
+                                ctx.block_env.basefee,
+                                builder_signer,
+                                nonce,
+                                signer.unwrap(),
+                                21000,
+                                balance_needed.to(),
+                            )
+                            .unwrap();
+                            let sponsor_tx =
+                                TransactionSignedEcRecoveredWithBlobs::new_no_blobs(sponsor_tx)
+                                    .unwrap();
 
-                        // TODO: actually sponsor the tx
-                        // We also need an update to OrderSimResult to include sponsorship payment info ("e.g. this tx needs to be sponsored for x amount of ETH")
+                            let sponsor_order = Order::Tx(MempoolTx::new(sponsor_tx));
+                            // prepend to parent orders
+                            parent_orders.push(sponsor_order.clone());
+
+                            // simulate again
+                            let sim_res = {
+                                let mut fork =
+                                    PartialBlockFork::new(state).with_tracer(&mut tracer);
+                                simulate_order_using_fork(
+                                    parent_orders,
+                                    order.clone(),
+                                    ctx,
+                                    &mut fork,
+                                )?
+                            };
+                            sim_res
+                            // We also need an update to OrderSimResult to include sponsorship payment info ("e.g. this tx needs to be sponsored for x amount of ETH")
+                        } else {
+                            todo!()
+                        }
+                    } else {
+                        todo!()
                     }
                 }
+                _ => todo!(),
             }
-            _ => {}
         }
-    }
+    };
+
     Ok(OrderSimResultWithGas {
         result: sim_res,
         gas_used: tracer.used_gas,
@@ -456,7 +488,7 @@ pub fn simulate_order(
 
 /// Simulates order (including parent (those needed to reach proper nonces) orders) using a precreated fork
 pub fn simulate_order_using_fork<Tracer: SimulationTracer>(
-    parent_orders: Vec<Order>,
+    parent_orders: &mut Vec<Order>,
     order: Order,
     ctx: &BlockBuildingContext,
     fork: &mut PartialBlockFork<'_, '_, '_, Tracer>,
