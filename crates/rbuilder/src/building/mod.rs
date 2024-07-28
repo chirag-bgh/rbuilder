@@ -431,6 +431,46 @@ impl<Tracer: SimulationTracer> PartialBlock<Tracer> {
 
         let mut fork = PartialBlockFork::new(state).with_tracer(&mut self.tracer);
         let rollback = fork.rollback_point();
+
+        if let Some(sponsor_cost) = order.sponsor_fee {
+            let nonce = fork
+                .nonce(ctx.builder_signer.as_ref().unwrap().address)
+                .unwrap();
+            let signer = order.signer().unwrap();
+
+            let builder_signer = ctx.builder_signer.as_ref().unwrap();
+            let sponsor_tx = create_payout_tx(
+                &ctx.chain_spec,
+                ctx.block_env.basefee,
+                builder_signer,
+                nonce,
+                signer,
+                21000,
+                sponsor_cost.to(),
+            )
+            .unwrap();
+            let sponsor_tx =
+                TransactionSignedEcRecoveredWithBlobs::new_no_blobs(sponsor_tx).unwrap();
+
+            let result = fork.commit_tx(
+                &sponsor_tx,
+                ctx,
+                self.gas_used,
+                self.gas_reserved,
+                self.blob_gas_used,
+            )?;
+
+            let ok_result = match result {
+                Ok(ok) => ok,
+                Err(err) => return Ok(Err(ExecutionError::OrderError(err.into()))),
+            };
+
+            self.gas_used += ok_result.gas_used;
+            self.blob_gas_used += ok_result.blob_gas_used;
+            self.executed_tx.push(ok_result.tx.clone());
+            self.receipts.push(ok_result.receipt.clone());
+        };
+
         let exec_result = fork.commit_order(
             &order.order,
             ctx,
@@ -439,6 +479,7 @@ impl<Tracer: SimulationTracer> PartialBlock<Tracer> {
             self.blob_gas_used,
             self.discard_txs,
         )?;
+
         let ok_result = match exec_result {
             Ok(ok) => ok,
             Err(err) => {

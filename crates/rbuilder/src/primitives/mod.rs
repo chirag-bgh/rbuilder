@@ -794,6 +794,10 @@ impl SimulatedOrder {
     pub fn nonces(&self) -> Vec<Nonce> {
         self.order.nonces()
     }
+
+    pub fn signer(&self) -> Option<Address> {
+        self.order.signer()
+    }
 }
 
 /// Unique OrderId used along the whole builder.

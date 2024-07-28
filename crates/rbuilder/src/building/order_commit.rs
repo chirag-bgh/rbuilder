@@ -308,6 +308,10 @@ pub enum CriticalCommitOrderError {
 }
 
 impl<'a, 'b, 'c, Tracer: SimulationTracer> PartialBlockFork<'a, 'b, 'c, Tracer> {
+    pub fn nonce(&mut self, address: Address) -> Result<u64, ProviderError> {
+        self.state.nonce(address)
+    }
+
     pub fn with_tracer<NewTracer: SimulationTracer>(
         self,
         tracer: &'c mut NewTracer,
