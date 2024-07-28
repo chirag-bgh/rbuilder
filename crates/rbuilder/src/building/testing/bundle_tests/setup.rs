@@ -216,6 +216,7 @@ impl TestSetup {
             sim_value: Default::default(),
             prev_order: Default::default(),
             used_state_trace: Default::default(),
+            sponsor_fee: Default::default(),
         };
 
         let result = self.partial_block.commit_order(

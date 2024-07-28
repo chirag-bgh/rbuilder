@@ -150,6 +150,7 @@ impl<SinkType: SimulatedOrderSink> MultiBackrunManager<SinkType> {
             sim_value: highest_payback_order.sim_order.sim_value.clone(),
             prev_order: None,
             used_state_trace: highest_payback_order.sim_order.used_state_trace.clone(),
+            sponsor_fee: highest_payback_order.sim_order.sponsor_fee.clone(),
         })
     }
 

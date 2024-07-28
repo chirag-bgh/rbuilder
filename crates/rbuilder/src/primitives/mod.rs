@@ -782,6 +782,8 @@ pub struct SimulatedOrder {
     pub prev_order: Option<OrderId>,
     /// Info about read/write slots during the simulation to help figure out what the Order is doing.
     pub used_state_trace: Option<UsedStateTrace>,
+    /// sponsor fee to be paid for this order if desired
+    pub sponsor_fee: Option<U256>,
 }
 
 impl SimulatedOrder {

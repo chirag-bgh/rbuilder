@@ -417,7 +417,6 @@ pub fn simulate_order(
     let sim_res = match &sim_res {
         OrderSimResult::Success(_, _) => sim_res,
         OrderSimResult::Failed(err) => {
-            let err_copy = err.clone();
             tracing::trace!("Order simulation failed: {}", err);
             match err {
                 OrderErr::Bundle(BundleErr::InvalidTransaction(_, transaction_err))
@@ -428,13 +427,13 @@ pub fn simulate_order(
                         if let InvalidTransaction::LackOfFundForMaxFee { fee, balance } =
                             invalid_transaction
                         {
-                            let balance_needed = **fee - **balance;
+                            let sponsor_cost = **fee - **balance;
 
-                            tracing::trace!("Order failed due to lack of funds for max fee. Attempting to sponsor. Fee: {}, Balance: {}, Sponsor fee: {}", fee, balance, balance_needed);
+                            tracing::trace!("Order failed due to lack of funds for max fee. Attempting to sponsor. Fee: {}, Balance: {}, Sponsor cost: {}", fee, balance, sponsor_cost);
 
                             let nonce =
                                 state.nonce(ctx.builder_signer.as_ref().unwrap().address)?;
-                            let signer = get_tx_signer(order_copy, err_copy);
+                            let signer = get_tx_signer(order_copy, err.clone());
 
                             let builder_signer = ctx.builder_signer.as_ref().unwrap();
                             let sponsor_tx = create_payout_tx(
@@ -444,7 +443,7 @@ pub fn simulate_order(
                                 nonce,
                                 signer.unwrap(),
                                 21000,
-                                balance_needed.to(),
+                                sponsor_cost.to(),
                             )
                             .unwrap();
                             let sponsor_tx =
@@ -456,7 +455,7 @@ pub fn simulate_order(
                             parent_orders.push(sponsor_order.clone());
 
                             // simulate again
-                            let sim_res = {
+                            let mut new_sim_res = {
                                 let mut fork =
                                     PartialBlockFork::new(state).with_tracer(&mut tracer);
                                 simulate_order_using_fork(
@@ -466,13 +465,32 @@ pub fn simulate_order(
                                     &mut fork,
                                 )?
                             };
-                            sim_res
+
+                            if let OrderSimResult::Success(sim_order, nonces) = &mut new_sim_res {
+                                if sim_order.sim_value.coinbase_profit < sponsor_cost {
+                                    tracing::trace!(
+                                        "Sponsorship failed. Order simulation failed: {:?}",
+                                        err
+                                    );
+                                    OrderSimResult::Failed(err.clone())
+                                } else {
+                                    tracing::trace!(
+                                        "Sponsorship successful. Order simulation succeeded."
+                                    );
+                                    // add sponsor fee to sim value
+                                    sim_order.sponsor_fee = Some(sponsor_cost);
+                                    OrderSimResult::Success(sim_order.clone(), nonces.clone())
+                                }
+                            } else {
+                                sim_res
+                            }
+
                             // We also need an update to OrderSimResult to include sponsorship payment info ("e.g. this tx needs to be sponsored for x amount of ETH")
                         } else {
-                            todo!()
+                            sim_res
                         }
                     } else {
-                        todo!()
+                        sim_res
                     }
                 }
                 _ => todo!(),
@@ -533,6 +551,7 @@ pub fn simulate_order_using_fork<Tracer: SimulationTracer>(
                     sim_value,
                     prev_order,
                     used_state_trace: res.used_state_trace,
+                    sponsor_fee: None,
                 },
                 new_nonces,
             ))

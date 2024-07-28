@@ -32,6 +32,7 @@ impl TestDataGenerator {
             sim_value,
             prev_order: None,
             used_state_trace: None,
+            sponsor_fee: None,
         }
     }
 }
