@@ -210,7 +210,6 @@ impl TestChainState {
             None,
             RootHashContext::new(true, false, None, V2),
             provider_factory.clone(),
-            provider_factory.clone(),
         ));
 
         let ctx = TestBlockContextBuilder::new(
