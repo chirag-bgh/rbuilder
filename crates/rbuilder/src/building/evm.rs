@@ -89,7 +89,7 @@ impl EvmFactory for EthCachedEvmFactory {
             .create_evm(db, env)
             .into_inner()
             .with_precompiles(WrappedPrecompile::new(
-                EthPrecompiles::default(),
+                EthPrecompiles::new(SpecId::default()),
                 self.cache.clone(),
             ));
 

@@ -64,12 +64,11 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
             .with_default_tables()
             .with_read_only(true)
             .build()?;
-        let runtime = Runtime::with_existing_handle(Handle::current())
-            .expect("must be called within a tokio runtime");
+        let runtime = Runtime::test();
         let provider_factory = ProviderFactory::new(
             db,
             chain_spec.clone(),
-            StaticFileProvider::read_only(static_files_path.as_path(), true).unwrap(),
+            StaticFileProvider::read_only(static_files_path.as_path()).unwrap(),
             rocksdb_provider,
             runtime,
         )?;
@@ -132,12 +131,11 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
                         .with_read_only(true)
                         .build()
                         .map_err(|e| eyre::eyre!("Failed to create RocksDB provider: {:?}", e))?;
-                    let runtime = Runtime::with_existing_handle(Handle::current())
-                        .map_err(|e| eyre::eyre!("Failed to create runtime: {:?}", e))?;
+                    let runtime = Runtime::test();
                     *provider_factory = ProviderFactory::new(
                         provider_factory.db_ref().clone(),
                         self.chain_spec.clone(),
-                        StaticFileProvider::read_only(self.static_files_path.as_path(), true)
+                        StaticFileProvider::read_only(self.static_files_path.as_path())
                             .unwrap(),
                         rocksdb_provider,
                         runtime,

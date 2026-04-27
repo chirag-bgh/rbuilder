@@ -16,14 +16,14 @@ use dashmap::DashMap;
 use quick_cache::sync::Cache;
 use reipc::rpc_provider::RpcProvider;
 use reth_errors::{ProviderError, ProviderResult};
-use reth_primitives::{Account, Bytecode};
+use reth_primitives_traits::{Account, Bytecode};
 use reth_provider::{
     errors::any::AnyError, AccountReader, BlockHashReader, BytecodeReader, HashedPostStateProvider,
     StateProofProvider, StateProvider, StateProviderBox, StateRootProvider, StorageRootProvider,
 };
 use reth_trie::{
-    updates::TrieUpdates, AccountProof, HashedPostState, HashedStorage, MultiProof,
-    MultiProofTargets, StorageMultiProof, StorageProof, TrieInput,
+    updates::TrieUpdates, AccountProof, ExecutionWitnessMode, HashedPostState, HashedStorage,
+    MultiProof, MultiProofTargets, StorageMultiProof, StorageProof, TrieInput,
 };
 use revm::{
     database::{BundleAccount, BundleState},
@@ -283,17 +283,6 @@ impl StateProvider for IpcStateProvider {
         Ok(storage)
     }
 
-    /// Get storage of given account by hashed key
-    fn storage_by_hashed_key(
-        &self,
-        account: Address,
-        hashed_key: alloy_primitives::FixedBytes<32>,
-    ) -> ProviderResult<Option<StorageValue>> {
-        // Convert hashed key to U256 and fetch via RPC
-        let key: U256 = U256::from_be_bytes(hashed_key.0);
-        let storage = rpc_call(&self.ipc_provider, "eth_getStorageAt", (account, key))?;
-        Ok(storage)
-    }
 }
 
 impl BlockHashReader for IpcStateProvider {
@@ -425,7 +414,12 @@ impl StateProofProvider for IpcStateProvider {
         unimplemented!()
     }
 
-    fn witness(&self, _input: TrieInput, _target: HashedPostState) -> ProviderResult<Vec<Bytes>> {
+    fn witness(
+        &self,
+        _input: TrieInput,
+        _target: HashedPostState,
+        _mode: ExecutionWitnessMode,
+    ) -> ProviderResult<Vec<Bytes>> {
         unimplemented!()
     }
 }

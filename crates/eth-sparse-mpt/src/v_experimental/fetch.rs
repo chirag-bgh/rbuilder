@@ -15,7 +15,7 @@ use reth_trie::{
     proof::{Proof, StorageProof},
     MultiProofTargets,
 };
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, LegacyKeyAdapter};
 
 use super::SharedCacheV2;
 
@@ -77,7 +77,7 @@ impl MissingNodesFetcher {
                     }
 
                     let proof = StorageProof::new_hashed(
-                        DatabaseTrieCursorFactory::new(provider.tx_ref()),
+                        DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
                         DatabaseHashedCursorFactory::new(provider.tx_ref()),
                         hashed_address,
                     );
@@ -117,7 +117,7 @@ impl MissingNodesFetcher {
         }
 
         let proof = Proof::new(
-            DatabaseTrieCursorFactory::new(provider.tx_ref()),
+            DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
             DatabaseHashedCursorFactory::new(provider.tx_ref()),
         );
         let targets = MultiProofTargets::accounts(std::mem::take(&mut self.account_proof_targets));

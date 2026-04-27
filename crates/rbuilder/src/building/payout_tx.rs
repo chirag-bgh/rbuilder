@@ -9,7 +9,8 @@ use alloy_rlp::Encodable as _;
 use reth_chainspec::ChainSpec;
 use reth_errors::ProviderError;
 use reth_evm::Evm;
-use reth_primitives::{Recovered, Transaction, TransactionSigned};
+use reth_ethereum_primitives::{Transaction, TransactionSigned};
+use reth_primitives_traits::Recovered;
 use revm::{
     context::result::{EVMError, ExecutionResult},
     database_interface::bal::EvmDatabaseError,
@@ -95,11 +96,7 @@ pub fn insert_test_payout_tx(
 
     let res = evm.transact(&tx)?;
     match res.result {
-        ExecutionResult::Success {
-            gas_used,
-            gas_refunded,
-            ..
-        } => Ok(Some(gas_used + gas_refunded)),
+        ExecutionResult::Success { gas, .. } => Ok(Some(gas.total_gas_spent())),
         _ => Ok(None),
     }
 }
@@ -218,7 +215,7 @@ mod tests {
     use assert_matches::assert_matches;
     use reth_chainspec::{EthereumHardfork, MAINNET};
     use reth_db::{tables, transaction::DbTxMut};
-    use reth_primitives::Account;
+    use reth_primitives_traits::Account;
     use reth_provider::test_utils::create_test_provider_factory_with_chain_spec;
     use revm::primitives::hardfork::SpecId;
     use std::sync::Arc;

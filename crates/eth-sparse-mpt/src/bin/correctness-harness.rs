@@ -14,10 +14,13 @@ use reth_evm_ethereum::EthEvmConfig;
 use reth_node_api::NodeTypesWithDBAdapter;
 use reth_node_ethereum::EthereumNode;
 use reth_provider::{
-    providers::{ConsistentDbView, OverlayStateProviderFactory, StaticFileProvider},
+    providers::{
+        ConsistentDbView, OverlayStateProviderFactory, RocksDBProvider, StaticFileProvider,
+    },
     BlockHashReader, BlockNumReader, BlockReader, ChainSpecProvider, HeaderProvider,
     ProviderFactory, TransactionVariant,
 };
+use reth_trie_db::ChangesetCache;
 use reth_revm::database::StateProviderDatabase;
 use reth_trie::TrieInput;
 use reth_trie_parallel::root::ParallelStateRoot;
@@ -347,15 +350,19 @@ fn calculate_reth_root(
     parent_hash: B256,
     outcome: &BundleState,
 ) -> Result<B256> {
-    let overlay = OverlayStateProviderFactory::new(factory.clone());
+    let overlay = OverlayStateProviderFactory::new(factory.clone(), ChangesetCache::new());
     let hasher = factory
         .history_by_block_hash(parent_hash)
         .with_context(|| format!("failed to open state provider at parent hash {parent_hash:?}"))?;
     let hashed_post_state = hasher.hashed_post_state(outcome);
     let trie_input = TrieInput::from_state(hashed_post_state);
-    ParallelStateRoot::new(overlay, trie_input.prefix_sets.freeze())
-        .incremental_root()
-        .with_context(|| "parallel state root failed")
+    ParallelStateRoot::new(
+        overlay,
+        trie_input.prefix_sets.freeze(),
+        reth_tasks::Runtime::test(),
+    )
+    .incremental_root()
+    .with_context(|| "parallel state root failed")
 }
 
 fn run_unwind_once(cli: &Cli, iteration: usize) -> Result<()> {
@@ -386,10 +393,11 @@ fn run_unwind_once(cli: &Cli, iteration: usize) -> Result<()> {
 fn open_provider_factory(
     datadir: &Path,
     chain: &str,
-    static_file_blocks_per_file: Option<u64>,
+    _static_file_blocks_per_file: Option<u64>,
 ) -> Result<Factory> {
     let db_path = datadir.join("db");
     let static_files_path = datadir.join("static_files");
+    let rocksdb_path = datadir.join("rocksdb");
     let chain_spec = parse_chain_spec(chain)?;
 
     let db = Arc::new(
@@ -403,24 +411,31 @@ fn open_provider_factory(
         .with_context(|| format!("failed to open reth db at {}", db_path.display()))?,
     );
 
-    let static_files =
-        StaticFileProvider::read_only(&static_files_path, false).with_context(|| {
+    let static_files = StaticFileProvider::read_only(&static_files_path).with_context(|| {
+        format!(
+            "failed to open static files at {}",
+            static_files_path.display()
+        )
+    })?;
+
+    let rocksdb_provider = RocksDBProvider::builder(&rocksdb_path)
+        .with_default_tables()
+        .with_read_only(true)
+        .build()
+        .with_context(|| {
             format!(
-                "failed to open static files at {}",
-                static_files_path.display()
+                "failed to open rocksdb at {}",
+                rocksdb_path.display()
             )
         })?;
-    let static_files = if let Some(blocks_per_file) = static_file_blocks_per_file {
-        static_files.with_custom_blocks_per_file(blocks_per_file)
-    } else {
-        static_files
-    };
 
     Ok(ProviderFactory::<NodeTypes>::new(
         db,
         chain_spec,
         static_files,
-    ))
+        rocksdb_provider,
+        reth_tasks::Runtime::test(),
+    )?)
 }
 
 fn parse_chain_spec(chain: &str) -> Result<Arc<ChainSpec>> {

@@ -146,8 +146,7 @@ where
         TrieInput::from_state(hashed_post_state)
             .prefix_sets
             .freeze(),
-        Runtime::with_existing_handle(Handle::current())
-            .expect("must be called within a tokio runtime"),
+        Runtime::test(),
     );
     parallel_root_calculator.incremental_root()
 }

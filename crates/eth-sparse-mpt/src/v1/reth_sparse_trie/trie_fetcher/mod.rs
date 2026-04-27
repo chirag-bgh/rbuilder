@@ -13,7 +13,7 @@ use reth_provider::{
     providers::ConsistentDbView, BlockReader, DBProvider, DatabaseProviderFactory,
 };
 use reth_trie::{proof::Proof, MultiProof as RethMultiProof, MultiProofTargets, EMPTY_ROOT_HASH};
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, LegacyKeyAdapter};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, Seq};
 
@@ -78,7 +78,7 @@ where
                 let start = Instant::now();
                 let provider = self.consistent_db_view.provider_ro()?;
                 let proof = Proof::new(
-                    DatabaseTrieCursorFactory::new(provider.tx_ref()),
+                    DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
                     DatabaseHashedCursorFactory::new(provider.tx_ref()),
                 );
                 let targets_accounts = targets.len();

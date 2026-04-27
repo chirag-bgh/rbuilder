@@ -14,7 +14,9 @@ use reth_trie::{
     proof::{Proof, StorageProof},
     MultiProofTargets, StateRoot,
 };
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseTrieCursorFactory};
+use reth_trie_db::{
+    DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, LegacyKeyAdapter,
+};
 
 use super::SharedCacheV2;
 
@@ -22,9 +24,12 @@ pub fn check_state_root_in_db(
     provider: &impl DBProvider,
     expected_state_root: B256,
 ) -> Result<(), SparseTrieError> {
-    let db_state_root = StateRoot::from_tx(provider.tx_ref())
-        .root()
-        .map_err(SparseTrieError::other)?;
+    let db_state_root = StateRoot::new(
+        DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
+        DatabaseHashedCursorFactory::new(provider.tx_ref()),
+    )
+    .root()
+    .map_err(SparseTrieError::other)?;
     if db_state_root == expected_state_root {
         Ok(())
     } else {
@@ -82,7 +87,7 @@ impl MissingNodesFetcher {
                     }
 
                     let proof = StorageProof::new_hashed(
-                        DatabaseTrieCursorFactory::new(provider.tx_ref()),
+                        DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
                         DatabaseHashedCursorFactory::new(provider.tx_ref()),
                         hashed_address,
                     );
@@ -114,7 +119,7 @@ impl MissingNodesFetcher {
         }
 
         let proof = Proof::new(
-            DatabaseTrieCursorFactory::new(provider.tx_ref()),
+            DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
             DatabaseHashedCursorFactory::new(provider.tx_ref()),
         );
         let targets = MultiProofTargets::accounts(std::mem::take(&mut self.account_proof_targets));
