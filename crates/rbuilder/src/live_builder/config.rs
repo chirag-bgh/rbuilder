@@ -65,7 +65,7 @@ use reth_chainspec::{Chain, ChainSpec, NamedChain};
 use reth_db::DatabaseEnv;
 use reth_node_api::NodeTypesWithDBAdapter;
 use reth_node_ethereum::EthereumNode;
-use reth_primitives::StaticFileSegment;
+use reth_static_file_types::StaticFileSegment;
 use reth_provider::StaticFileProviderFactory;
 use serde::Deserialize;
 use serde_with::{serde_as, OneOrMany};
@@ -764,6 +764,7 @@ pub fn create_provider_factory(
     reth_static_files_path: Option<&Path>,
     chain_spec: Arc<ChainSpec>,
     root_hash_config: Option<RootHashContext>,
+    runtime: reth::tasks::Runtime,
 ) -> eyre::Result<ProviderFactoryReopener<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>> {
     let reth_db_path = match (reth_db_path, reth_datadir) {
         (Some(reth_db_path), _) => PathBuf::from(reth_db_path),
@@ -773,6 +774,13 @@ pub fn create_provider_factory(
 
     let db = open_reth_db(&reth_db_path)?;
 
+    let reth_rocksdb_path = reth_datadir.map(|d| d.join("rocksdb")).unwrap_or_else(|| {
+        reth_db_path
+            .parent()
+            .unwrap_or(&reth_db_path)
+            .join("rocksdb")
+    });
+
     let reth_static_files_path = match (reth_static_files_path, reth_datadir) {
         (Some(reth_static_files_path), _) => PathBuf::from(reth_static_files_path),
         (None, Some(reth_datadir)) => reth_datadir.join("static_files"),
@@ -781,8 +789,14 @@ pub fn create_provider_factory(
         }
     };
 
-    let provider_factory_reopener =
-        ProviderFactoryReopener::new(db, chain_spec, reth_static_files_path, root_hash_config)?;
+    let provider_factory_reopener = ProviderFactoryReopener::new(
+        db,
+        chain_spec,
+        reth_static_files_path,
+        reth_rocksdb_path,
+        root_hash_config,
+        runtime,
+    )?;
 
     if provider_factory_reopener
         .provider_factory_unchecked()

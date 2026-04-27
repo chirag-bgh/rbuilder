@@ -42,21 +42,16 @@ use rbuilder_primitives::{
     mev_boost::BidAdjustmentDataV3, BlockSpace, Order, SimValue, SimulatedOrder,
     TransactionSignedEcRecoveredWithBlobs,
 };
-use reth::{
-    payload::PayloadId,
-    primitives::{Block, SealedBlock},
-};
+use reth::payload::PayloadId;
 use reth_chainspec::{ChainSpec, EthChainSpec, EthereumHardforks};
 use reth_errors::{BlockExecutionError, BlockValidationError, ProviderError};
+use reth_ethereum_primitives::{Block, BlockBody};
 use reth_evm::{ConfigureEvm, NextBlockEnvAttributes};
 use reth_evm_ethereum::{revm_spec_by_timestamp_and_block_number, EthEvmConfig};
-use reth_node_api::{EngineApiMessageVersion, PayloadBuilderAttributes};
-use reth_payload_builder::EthPayloadBuilderAttributes;
-use reth_primitives::BlockBody;
-use reth_primitives_traits::{proofs, Block as _};
+use reth_primitives_traits::{proofs, Block as _, SealedBlock};
 use revm::{
     context_interface::result::InvalidTransaction, database::states::bundle_state::BundleRetention,
-    primitives::hardfork::SpecId,
+    database_interface::DatabaseCommitExt, primitives::hardfork::SpecId,
 };
 use serde::Deserialize;
 use std::{
@@ -100,6 +95,84 @@ pub use conflict::*;
 
 /// Estimated overhead for the whole block header rlp length
 const BLOCK_HEADER_RLP_OVERHEAD: usize = 1024;
+
+/// Local replacement for the `EthPayloadBuilderAttributes` type that was removed in reth v2.0.
+///
+/// Mirrors the shape of the upstream type that rbuilder used; rbuilder accesses these fields and
+/// the equivalent getter methods directly. The id is derived from the parent hash and the rpc
+/// payload attributes the same way reth used to derive it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EthPayloadBuilderAttributes {
+    pub id: PayloadId,
+    pub parent: B256,
+    pub timestamp: u64,
+    pub suggested_fee_recipient: Address,
+    pub prev_randao: B256,
+    pub withdrawals: Withdrawals,
+    pub parent_beacon_block_root: Option<B256>,
+}
+
+impl EthPayloadBuilderAttributes {
+    /// Creates a new payload builder attributes from the given parent block hash and rpc payload
+    /// attributes. Derives the [`PayloadId`] in the same way reth's removed type did.
+    pub fn new(parent: B256, attributes: alloy_rpc_types_engine::PayloadAttributes) -> Self {
+        let id = derive_payload_id(&parent, &attributes);
+        Self {
+            id,
+            parent,
+            timestamp: attributes.timestamp,
+            suggested_fee_recipient: attributes.suggested_fee_recipient,
+            prev_randao: attributes.prev_randao,
+            withdrawals: attributes.withdrawals.unwrap_or_default().into(),
+            parent_beacon_block_root: attributes.parent_beacon_block_root,
+        }
+    }
+
+    pub const fn payload_id(&self) -> PayloadId {
+        self.id
+    }
+    pub const fn parent(&self) -> B256 {
+        self.parent
+    }
+    pub const fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+    pub const fn suggested_fee_recipient(&self) -> Address {
+        self.suggested_fee_recipient
+    }
+    pub const fn prev_randao(&self) -> B256 {
+        self.prev_randao
+    }
+    pub const fn parent_beacon_block_root(&self) -> Option<B256> {
+        self.parent_beacon_block_root
+    }
+    pub const fn withdrawals(&self) -> &Withdrawals {
+        &self.withdrawals
+    }
+}
+
+fn derive_payload_id(
+    parent: &B256,
+    attributes: &alloy_rpc_types_engine::PayloadAttributes,
+) -> PayloadId {
+    use alloy_rlp::Encodable;
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(parent.as_slice());
+    hasher.update(attributes.timestamp.to_be_bytes());
+    hasher.update(attributes.prev_randao.as_slice());
+    hasher.update(attributes.suggested_fee_recipient.as_slice());
+    if let Some(withdrawals) = &attributes.withdrawals {
+        let mut buf = Vec::new();
+        withdrawals.encode(&mut buf);
+        hasher.update(buf);
+    }
+    if let Some(parent_beacon_block) = attributes.parent_beacon_block_root {
+        hasher.update(parent_beacon_block);
+    }
+    let out = hasher.finalize();
+    PayloadId::new(out.as_slice()[..8].try_into().expect("sufficient length"))
+}
 
 #[derive(Debug, Clone)]
 pub struct BlockBuildingContext {
@@ -150,12 +223,10 @@ impl BlockBuildingContext {
         adjustment_fee_payers: ahash::HashSet<Address>,
         mempool_tx_detector: Arc<MempoolTxsDetector>,
     ) -> Option<BlockBuildingContext> {
-        let attributes = EthPayloadBuilderAttributes::try_new(
+        let attributes = EthPayloadBuilderAttributes::new(
             attributes.data.parent_block_hash,
             attributes.data.payload_attributes.clone(),
-            EngineApiMessageVersion::default() as u8,
-        )
-        .expect("PayloadBuilderAttributes::try_new");
+        );
         let eth_evm_config = EthEvmConfig::new(chain_spec.clone());
         let gas_limit = calculate_block_gas_limit(
             parent.gas_limit,
@@ -173,6 +244,8 @@ impl BlockBuildingContext {
                     gas_limit,
                     withdrawals: Some(attributes.withdrawals.clone()),
                     parent_beacon_block_root: attributes.parent_beacon_block_root,
+                    extra_data: Default::default(),
+                    slot_number: None,
                 },
             )
             .ok()?;
@@ -609,7 +682,7 @@ impl ExecutionError {
 
 pub struct FinalizeResult {
     /// Sealed block.
-    pub sealed_block: SealedBlock,
+    pub sealed_block: SealedBlock<Block>,
     // sidecars for all txs in SealedBlock
     pub txs_blob_sidecars: Vec<Arc<BlobTransactionSidecarVariant>>,
     /// The Pectra execution requests for this bid.
@@ -1105,6 +1178,8 @@ impl<Tracer: SimulationTracer, PartialBlockExecutionTracerType: PartialBlockExec
             blob_gas_used,
             excess_blob_gas,
             requests_hash,
+            block_access_list_hash: None,
+            slot_number: None,
         };
 
         let withdrawals = ctx

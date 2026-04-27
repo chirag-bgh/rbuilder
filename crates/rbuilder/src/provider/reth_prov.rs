@@ -4,8 +4,9 @@ use alloy_eips::BlockNumHash;
 use alloy_primitives::{BlockHash, BlockNumber, B256};
 use reth_errors::ProviderResult;
 use reth_provider::{
-    BlockReader, DatabaseProviderFactory, HeaderProvider, PruneCheckpointReader,
-    StageCheckpointReader, StateProviderBox, TrieReader,
+    BlockNumReader, BlockReader, ChangeSetReader, DatabaseProviderFactory, HeaderProvider,
+    PruneCheckpointReader, StageCheckpointReader, StateProviderBox, StorageChangeSetReader,
+    StorageSettingsCache,
 };
 use tracing::error;
 
@@ -16,13 +17,19 @@ use super::{RootHasher, StateProviderFactory};
 pub struct StateProviderFactoryFromRethProvider<P> {
     provider: P,
     root_hash_context: RootHashContext,
+    runtime: reth::tasks::Runtime,
 }
 
 impl<P> StateProviderFactoryFromRethProvider<P> {
-    pub fn new(provider: P, root_hash_context: RootHashContext) -> Self {
+    pub fn new(
+        provider: P,
+        root_hash_context: RootHashContext,
+        runtime: reth::tasks::Runtime,
+    ) -> Self {
         Self {
             provider,
             root_hash_context,
+            runtime,
         }
     }
 }
@@ -30,7 +37,13 @@ impl<P> StateProviderFactoryFromRethProvider<P> {
 impl<P> StateProviderFactory for StateProviderFactoryFromRethProvider<P>
 where
     P: DatabaseProviderFactory<
-            Provider: BlockReader + TrieReader + StageCheckpointReader + PruneCheckpointReader,
+            Provider: BlockReader
+                          + StageCheckpointReader
+                          + PruneCheckpointReader
+                          + BlockNumReader
+                          + ChangeSetReader
+                          + StorageChangeSetReader
+                          + StorageSettingsCache,
         > + reth_provider::StateProviderFactory
         + HeaderProvider<Header = Header>
         + Clone
@@ -69,7 +82,6 @@ where
     }
 
     fn root_hasher(&self, parent_num_hash: BlockNumHash) -> ProviderResult<Box<dyn RootHasher>> {
-        let hasher = self.history_by_block_hash(parent_num_hash.hash)?;
         let parent_state_root = self
             .provider
             .header_by_hash_or_number(parent_num_hash.hash.into())?
@@ -77,12 +89,13 @@ where
         if parent_state_root.is_none() {
             error!("Parent hash is not found (for root_hasher)");
         }
+
         Ok(Box::new(RootHasherImpl::new(
             parent_num_hash,
             parent_state_root,
             self.root_hash_context.clone(),
             self.provider.clone(),
-            hasher,
+            self.runtime.clone(),
         )))
     }
 }

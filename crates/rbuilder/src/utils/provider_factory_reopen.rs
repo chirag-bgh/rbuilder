@@ -13,15 +13,18 @@ use alloy_eips::BlockNumHash;
 use alloy_primitives::{Address, BlockHash, BlockNumber, Bytes, B256};
 use eth_sparse_mpt::*;
 use parking_lot::Mutex;
-use reth::providers::{BlockHashReader, ChainSpecProvider, ProviderFactory};
+use reth::{
+    providers::{BlockHashReader, ChainSpecProvider, ProviderFactory},
+    tasks::Runtime,
+};
 use reth_db::DatabaseError;
 use reth_errors::{ProviderError, ProviderResult, RethResult};
 use reth_node_api::{NodePrimitives, NodeTypesWithDB};
 use reth_provider::{
-    providers::{ProviderNodeTypes, StaticFileProvider},
-    BlockNumReader, BlockReader, DatabaseProviderFactory, HashedPostStateProvider, HeaderProvider,
+    providers::{ProviderNodeTypes, RocksDBProvider, StaticFileProvider},
+    BlockNumReader, BlockReader, ChangeSetReader, DatabaseProviderFactory, HeaderProvider,
     PruneCheckpointReader, StageCheckpointReader, StateProviderBox, StaticFileProviderFactory,
-    TrieReader,
+    StorageChangeSetReader, StorageSettingsCache,
 };
 use revm::database::BundleState;
 use std::{
@@ -29,6 +32,7 @@ use std::{
     path::PathBuf,
     sync::{mpsc, Arc},
 };
+use tokio::runtime::Handle;
 use tracing::{debug, error};
 
 /// This struct is used as a workaround for https://github.com/paradigmxyz/reth/issues/7836
@@ -40,6 +44,8 @@ pub struct ProviderFactoryReopener<N: NodeTypesWithDB> {
     provider_factory: Arc<Mutex<ProviderFactory<N>>>,
     chain_spec: Arc<N::ChainSpec>,
     static_files_path: PathBuf,
+    rocksdb_path: PathBuf,
+    runtime: Runtime,
     /// Patch to disable checking on test mode. Is ugly but ProviderFactoryReopener should die shortly (5/24/2024).
     testing_mode: bool,
     /// None ->No root hash (MockRootHasher)
@@ -52,18 +58,29 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
         db: N::DB,
         chain_spec: Arc<N::ChainSpec>,
         static_files_path: PathBuf,
+        rocksdb_path: PathBuf,
         root_hash_config: Option<RootHashContext>,
+        runtime: Runtime,
     ) -> RethResult<Self> {
+        let rocksdb_provider = RocksDBProvider::builder(&rocksdb_path)
+            .with_default_tables()
+            .with_read_only(true)
+            .build()?;
         let provider_factory = ProviderFactory::new(
             db,
             chain_spec.clone(),
-            StaticFileProvider::read_only(static_files_path.as_path(), true).unwrap(),
-        );
+            StaticFileProvider::read_only(static_files_path.as_path()).unwrap(),
+            rocksdb_provider,
+            runtime.clone(),
+        )?
+        .with_read_only_sync(false);
 
         Ok(Self {
             provider_factory: Arc::new(Mutex::new(provider_factory)),
             chain_spec,
             static_files_path,
+            rocksdb_path,
+            runtime,
             root_hash_config,
             testing_mode: false,
         })
@@ -71,7 +88,9 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
 
     pub fn new_from_existing(
         provider_factory: ProviderFactory<N>,
+        rocksdb_path: PathBuf,
         root_hash_config: Option<RootHashContext>,
+        runtime: Runtime,
     ) -> RethResult<Self> {
         let chain_spec = provider_factory.chain_spec();
         let static_files_path = provider_factory.static_file_provider().path().to_path_buf();
@@ -79,6 +98,8 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
             provider_factory: Arc::new(Mutex::new(provider_factory)),
             chain_spec,
             static_files_path,
+            rocksdb_path,
+            runtime,
             root_hash_config,
             testing_mode: true,
         })
@@ -110,12 +131,20 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
                     debug!(?err, "Provider factory is inconsistent, reopening");
                     inc_provider_reopen_counter();
 
+                    let rocksdb_provider = RocksDBProvider::builder(&self.rocksdb_path)
+                        .with_default_tables()
+                        .with_read_only(true)
+                        .build()
+                        .map_err(|e| eyre::eyre!("Failed to create RocksDB provider: {:?}", e))?;
                     *provider_factory = ProviderFactory::new(
                         provider_factory.db_ref().clone(),
                         self.chain_spec.clone(),
-                        StaticFileProvider::read_only(self.static_files_path.as_path(), true)
+                        StaticFileProvider::read_only(self.static_files_path.as_path())
                             .unwrap(),
-                    );
+                        rocksdb_provider,
+                        self.runtime.clone(),
+                    )?
+                    .with_read_only_sync(false);
                 }
             }
 
@@ -253,8 +282,8 @@ where
                 parent_num_hash,
                 parent_state_root,
                 root_hash_config.clone(),
-                provider.clone(),
                 provider,
+                self.runtime.clone(),
             ))
         } else {
             Box::new(MockRootHasher {})
@@ -262,21 +291,21 @@ where
     }
 }
 
-pub struct RootHasherImpl<T, HasherType> {
+pub struct RootHasherImpl<T> {
     parent_num_hash: BlockNumHash,
     provider: T,
-    hasher: HasherType,
     sparse_trie_shared_cache: SparseTrieSharedCache,
     config: RootHashContext,
+    runtime: Runtime,
 }
 
-impl<T, HasherType> RootHasherImpl<T, HasherType> {
+impl<T> RootHasherImpl<T> {
     pub fn new(
         parent_num_hash: BlockNumHash,
         parent_state_root: Option<B256>,
         config: RootHashContext,
         provider: T,
-        hasher: HasherType,
+        runtime: Runtime,
     ) -> Self {
         let sparse_trie_shared_cache = SparseTrieSharedCache::new_with_parent_block_data(
             parent_num_hash.hash,
@@ -285,18 +314,23 @@ impl<T, HasherType> RootHasherImpl<T, HasherType> {
         Self {
             parent_num_hash,
             provider,
-            hasher,
             config,
             sparse_trie_shared_cache,
+            runtime,
         }
     }
 }
 
-impl<T, HasherType> RootHasher for RootHasherImpl<T, HasherType>
+impl<T> RootHasher for RootHasherImpl<T>
 where
-    HasherType: HashedPostStateProvider,
     T: DatabaseProviderFactory<
-            Provider: BlockReader + TrieReader + StageCheckpointReader + PruneCheckpointReader,
+            Provider: BlockReader
+                          + StageCheckpointReader
+                          + PruneCheckpointReader
+                          + BlockNumReader
+                          + ChangeSetReader
+                          + StorageChangeSetReader
+                          + StorageSettingsCache,
         > + Send
         + Sync
         + Clone
@@ -337,18 +371,18 @@ where
     ) -> Result<B256, RootHashError> {
         calculate_state_root(
             self.provider.clone(),
-            &self.hasher,
             self.parent_num_hash,
             outcome,
             incremental_change,
             &self.sparse_trie_shared_cache,
             &mut local_ctx.root_hash_calculator,
             &self.config,
+            &self.runtime,
         )
     }
 }
 
-impl<T, HasherType> std::fmt::Debug for RootHasherImpl<T, HasherType> {
+impl<T> std::fmt::Debug for RootHasherImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RootHasherImpl")
             .field("parent_num_hash", &self.parent_num_hash)

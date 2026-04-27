@@ -15,7 +15,7 @@ use crate::{
 use alloy_primitives::{Address, Bytes, B256, I256, U256};
 use eth_sparse_mpt::utils::{HashMap, HashSet};
 use rbuilder_primitives::{order_statistics::OrderStatistics, SimValue, SimulatedOrder};
-use reth_primitives::SealedBlock;
+use reth_primitives_traits::SealedBlock;
 use revm::database::BundleState;
 use time::OffsetDateTime;
 

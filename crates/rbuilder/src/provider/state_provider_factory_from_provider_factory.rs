@@ -21,14 +21,20 @@ use super::{RootHasher, StateProviderFactory};
 pub struct StateProviderFactoryFromProviderFactory<N: NodeTypesWithDB> {
     provider: ProviderFactory<N>,
     root_hash_context: Option<RootHashContext>,
+    runtime: reth::tasks::Runtime,
 }
 
 impl<N: NodeTypesWithDB> StateProviderFactoryFromProviderFactory<N> {
     /// root_hash_config None -> no roothash (MockRootHasher)
-    pub fn new(provider: ProviderFactory<N>, root_hash_context: Option<RootHashContext>) -> Self {
+    pub fn new(
+        provider: ProviderFactory<N>,
+        root_hash_context: Option<RootHashContext>,
+        runtime: reth::tasks::Runtime,
+    ) -> Self {
         Self {
             provider,
             root_hash_context,
+            runtime,
         }
     }
 }
@@ -84,7 +90,7 @@ where
                 parent_state_root,
                 root_hash_context.clone(),
                 self.provider.clone(),
-                self.provider.clone(),
+                self.runtime.clone(),
             ))
         } else {
             Box::new(MockRootHasher {})

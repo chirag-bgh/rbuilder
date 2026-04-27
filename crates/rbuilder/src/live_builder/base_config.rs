@@ -31,7 +31,7 @@ use reth_chainspec::ChainSpec;
 use reth_db::DatabaseEnv;
 use reth_node_api::NodeTypesWithDBAdapter;
 use reth_node_ethereum::EthereumNode;
-use reth_primitives::StaticFileSegment;
+use reth_static_file_types::StaticFileSegment;
 use reth_provider::StaticFileProviderFactory;
 use serde::{Deserialize, Deserializer};
 use serde_with::serde_as;
@@ -292,6 +292,7 @@ impl BaseConfig {
     pub fn create_reth_provider_factory(
         &self,
         skip_root_hash: bool,
+        runtime: reth::tasks::Runtime,
     ) -> eyre::Result<ProviderFactoryReopener<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>>
     {
         create_provider_factory(
@@ -305,6 +306,7 @@ impl BaseConfig {
             } else {
                 Some(self.live_root_hash_config()?)
             },
+            runtime,
         )
     }
 
@@ -560,6 +562,7 @@ pub fn create_provider_factory(
     chain_spec: Arc<ChainSpec>,
     rw: bool,
     root_hash_config: Option<RootHashContext>,
+    runtime: reth::tasks::Runtime,
 ) -> eyre::Result<ProviderFactoryReopener<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>> {
     // shellexpand the reth datadir
     let reth_datadir = if let Some(reth_datadir) = reth_datadir {
@@ -584,6 +587,16 @@ pub fn create_provider_factory(
         open_reth_db(&reth_db_path)
     }?;
 
+    let reth_rocksdb_path = reth_datadir
+        .as_ref()
+        .map(|d| d.join("rocksdb"))
+        .unwrap_or_else(|| {
+            reth_db_path
+                .parent()
+                .unwrap_or(&reth_db_path)
+                .join("rocksdb")
+        });
+
     let reth_static_files_path = match (reth_static_files_path, reth_datadir) {
         (Some(reth_static_files_path), _) => PathBuf::from(reth_static_files_path),
         (None, Some(reth_datadir)) => reth_datadir.join("static_files"),
@@ -592,8 +605,14 @@ pub fn create_provider_factory(
         }
     };
 
-    let provider_factory_reopener =
-        ProviderFactoryReopener::new(db, chain_spec, reth_static_files_path, root_hash_config)?;
+    let provider_factory_reopener = ProviderFactoryReopener::new(
+        db,
+        chain_spec,
+        reth_static_files_path,
+        reth_rocksdb_path,
+        root_hash_config,
+        runtime,
+    )?;
 
     if provider_factory_reopener
         .provider_factory_unchecked()
@@ -632,7 +651,10 @@ mod test {
     use reth_db::init_db;
     use reth_db_common::init::init_genesis;
     use reth_node_core::dirs::{DataDirPath, MaybePlatformPath};
-    use reth_provider::{providers::StaticFileProvider, ProviderFactory};
+    use reth_provider::{
+        providers::{RocksDBBuilder, StaticFileProvider},
+        ProviderFactory,
+    };
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -658,21 +680,30 @@ mod test {
             .is_err());
     }
 
-    #[test]
-    fn test_reth_db() {
+    #[tokio::test]
+    async fn test_reth_db() {
         // Setup and initialize a temp reth db (with static files)
         let tempdir = TempDir::with_prefix_in("rbuilder-", "/tmp").unwrap();
 
         let data_dir = MaybePlatformPath::<DataDirPath>::from(tempdir.keep());
         let data_dir = data_dir.unwrap_or_chain_default(Chain::mainnet(), DatadirArgs::default());
 
-        let db = Arc::new(init_db(data_dir.data_dir(), Default::default()).unwrap());
+        let db_path = data_dir.db();
+        let rocksdb_path = data_dir.data_dir().join("rocksdb");
+        let db = Arc::new(init_db(&db_path, Default::default()).unwrap());
         let provider_factory = ProviderFactory::<NodeTypesWithDBAdapter<EthereumNode, _>>::new(
             db,
             SEPOLIA.clone(),
             StaticFileProvider::read_write(data_dir.static_files().as_path()).unwrap(),
-        );
+            RocksDBBuilder::new(&rocksdb_path)
+                .with_default_tables()
+                .build()
+                .expect("failed to create test RocksDB provider"),
+            reth::tasks::Runtime::test(),
+        )
+        .expect("failed to create provider factory");
         init_genesis(&provider_factory).unwrap();
+        drop(provider_factory); // release the RW lock before create_provider_factory opens the DB again
 
         // Create longer-lived PathBuf values
         let data_dir_path = data_dir.data_dir();
@@ -712,6 +743,7 @@ mod test {
                 Default::default(),
                 true,
                 None,
+                reth::tasks::Runtime::test(),
             );
 
             if *should_succeed {

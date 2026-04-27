@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use crate::{
-    utils::{convert_nibbles_to_reth_nybbles, convert_reth_nybbles_to_nibbles, HashMap},
-    SparseTrieError,
-};
+use crate::{utils::HashMap, SparseTrieError};
 use alloy_primitives::map::B256Set;
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -12,22 +9,31 @@ use alloy_primitives::B256;
 use nybbles::Nibbles;
 use reth_provider::{
     providers::ConsistentDbView, BlockReader, DBProvider, DatabaseProviderFactory,
+    StorageSettingsCache,
 };
 use reth_trie::{
     proof::{Proof, StorageProof},
     MultiProofTargets, StateRoot,
 };
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseStateRoot, DatabaseTrieCursorFactory};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
 
 use super::SharedCacheV2;
 
-pub fn check_state_root_in_db(
-    provider: &impl DBProvider,
+pub fn check_state_root_in_db<P>(
+    provider: &P,
     expected_state_root: B256,
-) -> Result<(), SparseTrieError> {
-    let db_state_root = StateRoot::from_tx(provider.tx_ref())
+) -> Result<(), SparseTrieError>
+where
+    P: DBProvider + StorageSettingsCache,
+{
+    let db_state_root = reth_trie_db::with_adapter!(provider, |A| {
+        StateRoot::new(
+            DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+            DatabaseHashedCursorFactory::new(provider.tx_ref()),
+        )
         .root()
-        .map_err(SparseTrieError::other)?;
+        .map_err(SparseTrieError::other)
+    })?;
     if db_state_root == expected_state_root {
         Ok(())
     } else {
@@ -52,12 +58,12 @@ impl MissingNodesFetcher {
             .storage_proof_targets
             .entry(*hashed_address)
             .or_default();
-        entry.0.insert(pad_path(node.clone()));
+        entry.0.insert(pad_path(node));
         entry.1.push(node);
     }
 
     pub fn add_missing_account_node(&mut self, node: Nibbles) {
-        self.account_proof_targets.push(pad_path(node.clone()));
+        self.account_proof_targets.push(pad_path(node));
         self.account_proof_requested_nodes.push(node);
     }
 
@@ -68,7 +74,8 @@ impl MissingNodesFetcher {
         consistent_db_view: &ConsistentDbView<Provider>,
     ) -> Result<usize, SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         let fetched_nodes: Arc<Mutex<usize>> = Default::default();
 
@@ -84,23 +91,20 @@ impl MissingNodesFetcher {
                         check_state_root_in_db(&provider, parent_state_root)?;
                     }
 
-                    let proof = StorageProof::new_hashed(
-                        DatabaseTrieCursorFactory::new(provider.tx_ref()),
-                        DatabaseHashedCursorFactory::new(provider.tx_ref()),
-                        hashed_address,
-                    );
-                    let storge_multiproof = proof
-                        .storage_multiproof(targets)
-                        .map_err(SparseTrieError::other)?;
+                    let storge_multiproof = reth_trie_db::with_adapter!(provider, |A| {
+                        let proof = StorageProof::new_hashed(
+                            DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                            DatabaseHashedCursorFactory::new(provider.tx_ref()),
+                            hashed_address,
+                        );
+                        proof.storage_multiproof(targets).map_err(SparseTrieError::other)
+                    })?;
                     *fetched_nodes.lock() += requested_proofs.len();
                     for requested_proof in requested_proofs {
-                        let proof_for_node = storge_multiproof.subtree.matching_nodes_sorted(
-                            &convert_nibbles_to_reth_nybbles(requested_proof.clone()),
-                        );
-                        let reth_proof_for_node = proof_for_node
-                            .into_iter()
-                            .map(|(k, v)| (convert_reth_nybbles_to_nibbles(k), v))
-                            .collect();
+                        let proof_for_node = storge_multiproof
+                            .subtree
+                            .matching_nodes_sorted(&requested_proof);
+                        let reth_proof_for_node = proof_for_node.into_iter().collect();
                         let proof_store =
                             shared_cache.account_proof_store_hashed_address(&hashed_address);
                         proof_store
@@ -119,23 +123,22 @@ impl MissingNodesFetcher {
             check_state_root_in_db(&provider, parent_state_root)?
         }
 
-        let proof = Proof::new(
-            DatabaseTrieCursorFactory::new(provider.tx_ref()),
-            DatabaseHashedCursorFactory::new(provider.tx_ref()),
-        );
         let targets = MultiProofTargets::accounts(std::mem::take(&mut self.account_proof_targets));
-        let multiproof = proof.multiproof(targets).map_err(SparseTrieError::other)?;
+        let multiproof = reth_trie_db::with_adapter!(provider, |A| {
+            let proof = Proof::new(
+                DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                DatabaseHashedCursorFactory::new(provider.tx_ref()),
+            );
+            proof.multiproof(targets).map_err(SparseTrieError::other)
+        })?;
 
         *fetched_nodes.lock() += self.account_proof_requested_nodes.len();
         for requested_node in self.account_proof_requested_nodes.drain(..) {
             let proof_for_node = multiproof
                 .account_subtree
-                .matching_nodes_sorted(&convert_nibbles_to_reth_nybbles(requested_node.clone()));
+                .matching_nodes_sorted(&requested_node);
 
-            let reth_proof_for_node = proof_for_node
-                .into_iter()
-                .map(|(k, v)| (convert_reth_nybbles_to_nibbles(k), v))
-                .collect();
+            let reth_proof_for_node = proof_for_node.into_iter().collect();
             shared_cache
                 .account_trie
                 .add_proof(requested_node, reth_proof_for_node)
@@ -147,7 +150,9 @@ impl MissingNodesFetcher {
 }
 
 fn pad_path(mut path: Nibbles) -> B256 {
-    path.as_mut_vec_unchecked().resize(64, 0);
+    let mut path_vec = path.to_vec();
+    path_vec.resize(64, 0);
+    path = Nibbles::from_nibbles_unchecked(&path_vec);
     let mut res = B256::default();
     path.pack_to(res.as_mut_slice());
     res

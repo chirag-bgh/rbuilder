@@ -16,14 +16,14 @@ use dashmap::DashMap;
 use quick_cache::sync::Cache;
 use reipc::rpc_provider::RpcProvider;
 use reth_errors::{ProviderError, ProviderResult};
-use reth_primitives::{Account, Bytecode};
+use reth_primitives_traits::{Account, Bytecode};
 use reth_provider::{
     errors::any::AnyError, AccountReader, BlockHashReader, BytecodeReader, HashedPostStateProvider,
     StateProofProvider, StateProvider, StateProviderBox, StateRootProvider, StorageRootProvider,
 };
 use reth_trie::{
-    updates::TrieUpdates, AccountProof, HashedPostState, HashedStorage, MultiProof,
-    MultiProofTargets, StorageMultiProof, StorageProof, TrieInput,
+    updates::TrieUpdates, AccountProof, ExecutionWitnessMode, HashedPostState, HashedStorage,
+    MultiProof, MultiProofTargets, StorageMultiProof, StorageProof, TrieInput,
 };
 use revm::{
     database::{BundleAccount, BundleState},
@@ -56,7 +56,7 @@ pub struct IpcStateProviderFactory {
     ipc_provider: RpcProvider,
 
     code_cache: Arc<DashMap<B256, Bytecode>>,
-    state_provider_by_hash: Arc<Cache<BlockHash, Arc<IpcStateProvider>>>,
+    state_provider_by_hash: Arc<Cache<BlockHash, IpcStateProvider>>,
 }
 
 impl IpcStateProviderFactory {
@@ -122,18 +122,17 @@ impl StateProviderFactory for IpcStateProviderFactory {
 
     /// Gets state at the block hash
     fn history_by_block_hash(&self, block: BlockHash) -> ProviderResult<StateProviderBox> {
-        if let Some(state) = self.state_provider_by_hash.get(&block) {
-            return Ok(Box::new(state));
+        if let Some(cached) = self.state_provider_by_hash.get(&block) {
+            return Ok(Box::new(cached.clone()));
         }
 
-        let state = IpcStateProvider::into_boxed(
+        let provider = IpcStateProvider::new(
             self.ipc_provider.clone(),
             block.into(),
             self.code_cache.clone(),
         );
-
-        self.state_provider_by_hash.insert(block, *state.clone());
-        Ok(state)
+        self.state_provider_by_hash.insert(block, provider.clone());
+        Ok(Box::new(provider))
     }
 
     /// Gets block header given block hash
@@ -197,13 +196,13 @@ pub struct IpcStateProvider {
     ipc_provider: RpcProvider,
     block_id: BlockId,
 
-    // Per block cache
-    block_hash_cache: DashMap<u64, BlockHash>,
+    // Per block cache (Arc-wrapped so Clone shares the same cache data)
+    block_hash_cache: Arc<DashMap<u64, BlockHash>>,
     // Note: It's ok to cache Account (and Storage) even in case of None, this is because StateProvider gives the
     // state for some past block, so if account didn't exist the first time, it cannot magically
     // appear later on
-    account_cache: DashMap<Address, Option<Account>>,
-    storage_cache: DashMap<(Address, StorageKey), Option<StorageValue>>,
+    account_cache: Arc<DashMap<Address, Option<Account>>>,
+    storage_cache: Arc<DashMap<(Address, StorageKey), Option<StorageValue>>>,
 
     // Global cache (cache not related to specific block)
     code_cache: Arc<DashMap<B256, Bytecode>>,
@@ -222,22 +221,19 @@ impl IpcStateProvider {
 
             code_cache,
 
-            block_hash_cache: DashMap::new(),
-            storage_cache: DashMap::new(),
-            account_cache: DashMap::new(),
+            block_hash_cache: Arc::new(DashMap::new()),
+            storage_cache: Arc::new(DashMap::new()),
+            account_cache: Arc::new(DashMap::new()),
         }
     }
 
     /// Crates new instance of state provider on the heap
-    // Box::new(Arc::new(Self)) is required because StateProviderFactory returns Box<dyn StateProvider>
-    // Note: this is known clippy issue: https://github.com/rust-lang/rust-clippy/issues/7472
-    #[allow(clippy::redundant_allocation)]
     fn into_boxed(
         ipc_provider: RpcProvider,
         block_id: BlockId,
         code_cache: Arc<DashMap<B256, Bytecode>>,
-    ) -> Box<Arc<Self>> {
-        Box::new(Arc::new(Self::new(ipc_provider, block_id, code_cache)))
+    ) -> Box<Self> {
+        Box::new(Self::new(ipc_provider, block_id, code_cache))
     }
 }
 
@@ -286,6 +282,7 @@ impl StateProvider for IpcStateProvider {
 
         Ok(storage)
     }
+
 }
 
 impl BlockHashReader for IpcStateProvider {
@@ -417,7 +414,12 @@ impl StateProofProvider for IpcStateProvider {
         unimplemented!()
     }
 
-    fn witness(&self, _input: TrieInput, _target: HashedPostState) -> ProviderResult<Vec<Bytes>> {
+    fn witness(
+        &self,
+        _input: TrieInput,
+        _target: HashedPostState,
+        _mode: ExecutionWitnessMode,
+    ) -> ProviderResult<Vec<Bytes>> {
         unimplemented!()
     }
 }

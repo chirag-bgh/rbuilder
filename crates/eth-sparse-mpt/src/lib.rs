@@ -8,6 +8,7 @@
 
 use crate::utils::{HashMap, HashSet};
 use alloy_primitives::{Address, Bytes, B256};
+use reth_provider::StorageSettingsCache;
 use reth_provider::{providers::ConsistentDbView, BlockReader, DatabaseProviderFactory};
 use revm::database::BundleState;
 use std::sync::Arc;
@@ -106,7 +107,9 @@ pub fn prefetch_tries_for_accounts<'a, Provider>(
     version: ETHSpareMPTVersion,
 ) -> Result<SparseTrieMetrics, SparseTrieError>
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache>
+        + Send
+        + Sync,
 {
     match version {
         ETHSpareMPTVersion::V1 => {
@@ -165,7 +168,9 @@ pub fn calculate_account_proofs_with_sparse_trie<Provider>(
     SparseTrieMetrics,
 )
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache>
+        + Send
+        + Sync,
 {
     let calculate = || match version {
         ETHSpareMPTVersion::V1 => (
@@ -220,7 +225,9 @@ pub fn calculate_root_hash_with_sparse_trie<Provider>(
     version: ETHSpareMPTVersion,
 ) -> (Result<B256, SparseTrieError>, SparseTrieMetrics)
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache>
+        + Send
+        + Sync,
 {
     if let Some(thread_pool) = thread_pool {
         thread_pool.rayon_pool.install(|| {
@@ -254,7 +261,9 @@ pub fn calculate_root_hash_with_sparse_trie_internal<Provider>(
     version: ETHSpareMPTVersion,
 ) -> (Result<B256, SparseTrieError>, SparseTrieMetrics)
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache>
+        + Send
+        + Sync,
 {
     match version {
         ETHSpareMPTVersion::V1 => {

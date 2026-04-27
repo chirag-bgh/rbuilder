@@ -145,7 +145,17 @@ where
         )
         .await
     } else {
-        let provider = config.base_config().create_reth_provider_factory(false)?;
+        let runtime = {
+            let config = reth::tasks::RuntimeConfig::default().with_tokio(
+                reth::tasks::TokioConfig::existing_handle(tokio::runtime::Handle::current()),
+            );
+            reth::tasks::RuntimeBuilder::new(config)
+                .build()
+                .map_err(|e| eyre::eyre!("failed to build reth runtime: {e:?}"))?
+        };
+        let provider = config
+            .base_config()
+            .create_reth_provider_factory(false, runtime)?;
         run_builder(
             provider,
             config,

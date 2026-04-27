@@ -22,8 +22,9 @@ use reth::{
 };
 use reth_node_ethereum::{node::EthereumAddOns, EthereumNode};
 use reth_provider::{
-    providers::BlockchainProvider, BlockReader, ChainSpecProvider, DatabaseProviderFactory,
-    HeaderProvider, PruneCheckpointReader, StageCheckpointReader, TrieReader,
+    providers::BlockchainProvider, BlockNumReader, BlockReader, ChainSpecProvider, ChangeSetReader,
+    DatabaseProviderFactory, HeaderProvider, PruneCheckpointReader, StageCheckpointReader,
+    StorageChangeSetReader, StorageSettingsCache,
 };
 use reth_transaction_pool::{blobstore::DiskFileBlobStore, EthTransactionPool};
 use std::{
@@ -88,7 +89,13 @@ fn spawn_rbuilder<P>(
     config_path: PathBuf,
 ) where
     P: DatabaseProviderFactory<
-            Provider: BlockReader + TrieReader + StageCheckpointReader + PruneCheckpointReader,
+            Provider: BlockReader
+                          + StageCheckpointReader
+                          + PruneCheckpointReader
+                          + BlockNumReader
+                          + ChangeSetReader
+                          + StorageChangeSetReader
+                          + StorageSettingsCache,
         > + reth_provider::StateProviderFactory
         + HeaderProvider<Header = Header>
         + reth_provider::ChainSpecProvider
@@ -118,11 +125,20 @@ fn spawn_rbuilder<P>(
             )
             .await?;
 
+            let runtime = {
+                let config = reth::tasks::RuntimeConfig::default().with_tokio(
+                    reth::tasks::TokioConfig::existing_handle(tokio::runtime::Handle::current()),
+                );
+                reth::tasks::RuntimeBuilder::new(config)
+                    .build()
+                    .map_err(|e| eyre::eyre!("failed to build reth Runtime: {e:?}"))?
+            };
             let builder = config
                 .new_builder(
                     StateProviderFactoryFromRethProvider::new(
                         provider,
                         config.base_config().live_root_hash_config()?,
+                        runtime,
                     ),
                     cancel,
                 )

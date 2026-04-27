@@ -137,7 +137,7 @@ async fn create_provider_from_config(
     // We don't need root hash computation for monitoring, so we pass true to skip it
     let provider = config
         .base_config
-        .create_reth_provider_factory(true) // skip_root_hash = true
+        .create_reth_provider_factory(true, reth::tasks::Runtime::test()) // skip_root_hash = true
         .context("Failed to create provider from config")?;
 
     Ok(provider)
@@ -158,6 +158,7 @@ fn create_provider_from_reth_path(
         chain_spec,
         false, // read-only
         None,  // no root hash
+        reth::tasks::Runtime::test(),
     )
     .context("Failed to create provider from reth path")?;
 
