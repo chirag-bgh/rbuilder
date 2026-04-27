@@ -71,7 +71,8 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
             StaticFileProvider::read_only(static_files_path.as_path()).unwrap(),
             rocksdb_provider,
             runtime,
-        )?;
+        )?
+        .with_read_only_sync(true);
 
         Ok(Self {
             provider_factory: Arc::new(Mutex::new(provider_factory)),
@@ -139,7 +140,8 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
                             .unwrap(),
                         rocksdb_provider,
                         runtime,
-                    )?;
+                    )?
+                    .with_read_only_sync(true);
                 }
             }
 
