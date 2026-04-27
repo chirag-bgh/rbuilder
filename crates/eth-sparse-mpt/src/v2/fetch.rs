@@ -9,27 +9,31 @@ use alloy_primitives::B256;
 use nybbles::Nibbles;
 use reth_provider::{
     providers::ConsistentDbView, BlockReader, DBProvider, DatabaseProviderFactory,
+    StorageSettingsCache,
 };
 use reth_trie::{
     proof::{Proof, StorageProof},
     MultiProofTargets, StateRoot,
 };
-use reth_trie_db::{
-    DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, LegacyKeyAdapter,
-};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
 
 use super::SharedCacheV2;
 
-pub fn check_state_root_in_db(
-    provider: &impl DBProvider,
+pub fn check_state_root_in_db<P>(
+    provider: &P,
     expected_state_root: B256,
-) -> Result<(), SparseTrieError> {
-    let db_state_root = StateRoot::new(
-        DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
-        DatabaseHashedCursorFactory::new(provider.tx_ref()),
-    )
-    .root()
-    .map_err(SparseTrieError::other)?;
+) -> Result<(), SparseTrieError>
+where
+    P: DBProvider + StorageSettingsCache,
+{
+    let db_state_root = reth_trie_db::with_adapter!(provider, |A| {
+        StateRoot::new(
+            DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+            DatabaseHashedCursorFactory::new(provider.tx_ref()),
+        )
+        .root()
+        .map_err(SparseTrieError::other)
+    })?;
     if db_state_root == expected_state_root {
         Ok(())
     } else {
@@ -70,7 +74,8 @@ impl MissingNodesFetcher {
         consistent_db_view: &ConsistentDbView<Provider>,
     ) -> Result<usize, SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         let fetched_nodes: Arc<Mutex<usize>> = Default::default();
 
@@ -86,14 +91,14 @@ impl MissingNodesFetcher {
                         check_state_root_in_db(&provider, parent_state_root)?;
                     }
 
-                    let proof = StorageProof::new_hashed(
-                        DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
-                        DatabaseHashedCursorFactory::new(provider.tx_ref()),
-                        hashed_address,
-                    );
-                    let storge_multiproof = proof
-                        .storage_multiproof(targets)
-                        .map_err(SparseTrieError::other)?;
+                    let storge_multiproof = reth_trie_db::with_adapter!(provider, |A| {
+                        let proof = StorageProof::new_hashed(
+                            DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                            DatabaseHashedCursorFactory::new(provider.tx_ref()),
+                            hashed_address,
+                        );
+                        proof.storage_multiproof(targets).map_err(SparseTrieError::other)
+                    })?;
                     *fetched_nodes.lock() += requested_proofs.len();
                     for requested_proof in requested_proofs {
                         let proof_for_node = storge_multiproof
@@ -118,12 +123,14 @@ impl MissingNodesFetcher {
             check_state_root_in_db(&provider, parent_state_root)?
         }
 
-        let proof = Proof::new(
-            DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
-            DatabaseHashedCursorFactory::new(provider.tx_ref()),
-        );
         let targets = MultiProofTargets::accounts(std::mem::take(&mut self.account_proof_targets));
-        let multiproof = proof.multiproof(targets).map_err(SparseTrieError::other)?;
+        let multiproof = reth_trie_db::with_adapter!(provider, |A| {
+            let proof = Proof::new(
+                DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                DatabaseHashedCursorFactory::new(provider.tx_ref()),
+            );
+            proof.multiproof(targets).map_err(SparseTrieError::other)
+        })?;
 
         *fetched_nodes.lock() += self.account_proof_requested_nodes.len();
         for requested_node in self.account_proof_requested_nodes.drain(..) {

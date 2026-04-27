@@ -1,7 +1,7 @@
 use alloy_primitives::B256;
 use change_set::{prepare_change_set, prepare_change_set_for_prefetch};
 use hash::RootHashError;
-use reth_provider::{providers::ConsistentDbView, BlockReader, DatabaseProviderFactory};
+use reth_provider::{providers::ConsistentDbView, BlockReader, DatabaseProviderFactory, StorageSettingsCache};
 use revm::database::BundleState;
 use std::time::{Duration, Instant};
 
@@ -62,7 +62,7 @@ pub fn prefetch_tries_for_accounts<'a, Provider>(
     changed_data: impl Iterator<Item = &'a ChangedAccountData>,
 ) -> Result<SparseTrieMetrics, SparseTrieError>
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
 {
     let mut metrics = SparseTrieMetrics::default();
 
@@ -107,7 +107,7 @@ pub fn calculate_root_hash_with_sparse_trie<Provider>(
     shared_cache: SparseTrieSharedCache,
 ) -> (Result<B256, SparseTrieError>, SparseTrieMetrics)
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
 {
     let mut metrics = SparseTrieMetrics::default();
 

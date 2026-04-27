@@ -11,9 +11,10 @@ use reth_errors::ProviderError;
 use reth_execution_errors::trie::StateProofError;
 use reth_provider::{
     providers::ConsistentDbView, BlockReader, DBProvider, DatabaseProviderFactory,
+    StorageSettingsCache,
 };
 use reth_trie::{proof::Proof, MultiProof as RethMultiProof, MultiProofTargets, EMPTY_ROOT_HASH};
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, LegacyKeyAdapter};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, Seq};
 
@@ -60,7 +61,8 @@ pub struct TrieFetcher<Provider> {
 
 impl<Provider> TrieFetcher<Provider>
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider:
+        DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
 {
     pub fn new(consistent_db_view: ConsistentDbView<Provider>) -> Self {
         Self { consistent_db_view }
@@ -77,14 +79,16 @@ where
             .map(|targets| -> Result<MultiProof, FetchNodeError> {
                 let start = Instant::now();
                 let provider = self.consistent_db_view.provider_ro()?;
-                let proof = Proof::new(
-                    DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
-                    DatabaseHashedCursorFactory::new(provider.tx_ref()),
-                );
                 let targets_accounts = targets.len();
                 let targets_slots = targets.values().map(|v| v.len()).sum::<usize>();
 
-                let reth_multiproof = proof.multiproof(targets)?;
+                let reth_multiproof = reth_trie_db::with_adapter!(provider, |A| {
+                    let proof = Proof::new(
+                        DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                        DatabaseHashedCursorFactory::new(provider.tx_ref()),
+                    );
+                    proof.multiproof(targets)
+                })?;
                 let result = convert_reth_multiproof(reth_multiproof, &all_requested_accounts);
                 let time_ms = start.elapsed().as_micros() as f64 / 1000.0;
                 trace!(

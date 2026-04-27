@@ -4,7 +4,9 @@ use fetch::MissingNodesFetcher;
 use nybbles::Nibbles;
 use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
-use reth_provider::{providers::ConsistentDbView, BlockReader, DatabaseProviderFactory};
+use reth_provider::{
+    providers::ConsistentDbView, BlockReader, DatabaseProviderFactory, StorageSettingsCache,
+};
 use reth_trie::TrieAccount;
 use revm::{
     database::{BundleAccount, BundleState},
@@ -255,7 +257,7 @@ pub fn prefetch_proofs<'a, Provider>(
     changed_data: impl Iterator<Item = &'a ChangedAccountData>,
 ) -> Result<SparseTrieMetrics, SparseTrieError>
 where
-    Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+    Provider: DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
 {
     let mut metrics = SparseTrieMetrics::default();
     let mut fetcher = MissingNodesFetcher::default();
@@ -426,7 +428,8 @@ impl RootHashCalculator {
         stats: &mut Stats,
     ) -> Result<(), SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         stats.start();
 
@@ -622,7 +625,8 @@ impl RootHashCalculator {
         stats: &mut Stats,
     ) -> Result<(), SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         let fetcher = Arc::new(Mutex::new(MissingNodesFetcher::default()));
 
@@ -909,7 +913,8 @@ impl RootHashCalculator {
         stats: &mut Stats,
     ) -> Result<(), SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         let mut fetcher = MissingNodesFetcher::default();
 
@@ -967,7 +972,8 @@ impl RootHashCalculator {
         proof_targets: &HashSet<Address>,
     ) -> Result<(B256, HashMap<Address, Vec<Bytes>>, SparseTrieMetrics), SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         if !incremental_change.is_empty() {
             self.incremental_account_change.extend(incremental_change);

@@ -9,13 +9,13 @@ use alloy_primitives::B256;
 use nybbles::Nibbles;
 use reth_provider::{
     providers::ConsistentDbView, BlockHashReader, BlockNumReader, BlockReader, DBProvider,
-    DatabaseProviderFactory,
+    DatabaseProviderFactory, StorageSettingsCache,
 };
 use reth_trie::{
     proof::{Proof, StorageProof},
     MultiProofTargets,
 };
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, LegacyKeyAdapter};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
 
 use super::SharedCacheV2;
 
@@ -52,7 +52,8 @@ impl MissingNodesFetcher {
         consistent_db_view: &ConsistentDbView<Provider>,
     ) -> Result<usize, SparseTrieError>
     where
-        Provider: DatabaseProviderFactory<Provider: BlockReader> + Send + Sync,
+        Provider:
+            DatabaseProviderFactory<Provider: BlockReader + StorageSettingsCache> + Send + Sync,
     {
         let fetched_nodes: Arc<Mutex<usize>> = Default::default();
 
@@ -76,14 +77,14 @@ impl MissingNodesFetcher {
                         }
                     }
 
-                    let proof = StorageProof::new_hashed(
-                        DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
-                        DatabaseHashedCursorFactory::new(provider.tx_ref()),
-                        hashed_address,
-                    );
-                    let storge_multiproof = proof
-                        .storage_multiproof(targets)
-                        .map_err(SparseTrieError::other)?;
+                    let storge_multiproof = reth_trie_db::with_adapter!(provider, |A| {
+                        let proof = StorageProof::new_hashed(
+                            DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                            DatabaseHashedCursorFactory::new(provider.tx_ref()),
+                            hashed_address,
+                        );
+                        proof.storage_multiproof(targets).map_err(SparseTrieError::other)
+                    })?;
                     *fetched_nodes.lock() += requested_proofs.len();
                     for requested_proof in requested_proofs {
                         let proof_for_node = storge_multiproof
@@ -116,12 +117,14 @@ impl MissingNodesFetcher {
             }
         }
 
-        let proof = Proof::new(
-            DatabaseTrieCursorFactory::<_, LegacyKeyAdapter>::new(provider.tx_ref()),
-            DatabaseHashedCursorFactory::new(provider.tx_ref()),
-        );
         let targets = MultiProofTargets::accounts(std::mem::take(&mut self.account_proof_targets));
-        let multiproof = proof.multiproof(targets).map_err(SparseTrieError::other)?;
+        let multiproof = reth_trie_db::with_adapter!(provider, |A| {
+            let proof = Proof::new(
+                DatabaseTrieCursorFactory::<_, A>::new(provider.tx_ref()),
+                DatabaseHashedCursorFactory::new(provider.tx_ref()),
+            );
+            proof.multiproof(targets).map_err(SparseTrieError::other)
+        })?;
 
         *fetched_nodes.lock() += self.account_proof_requested_nodes.len();
         for requested_node in self.account_proof_requested_nodes.drain(..) {
