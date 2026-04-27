@@ -764,6 +764,7 @@ pub fn create_provider_factory(
     reth_static_files_path: Option<&Path>,
     chain_spec: Arc<ChainSpec>,
     root_hash_config: Option<RootHashContext>,
+    runtime: reth::tasks::Runtime,
 ) -> eyre::Result<ProviderFactoryReopener<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>> {
     let reth_db_path = match (reth_db_path, reth_datadir) {
         (Some(reth_db_path), _) => PathBuf::from(reth_db_path),
@@ -794,6 +795,7 @@ pub fn create_provider_factory(
         reth_static_files_path,
         reth_rocksdb_path,
         root_hash_config,
+        runtime,
     )?;
 
     if provider_factory_reopener

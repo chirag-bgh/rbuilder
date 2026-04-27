@@ -17,13 +17,19 @@ use super::{RootHasher, StateProviderFactory};
 pub struct StateProviderFactoryFromRethProvider<P> {
     provider: P,
     root_hash_context: RootHashContext,
+    runtime: reth::tasks::Runtime,
 }
 
 impl<P> StateProviderFactoryFromRethProvider<P> {
-    pub fn new(provider: P, root_hash_context: RootHashContext) -> Self {
+    pub fn new(
+        provider: P,
+        root_hash_context: RootHashContext,
+        runtime: reth::tasks::Runtime,
+    ) -> Self {
         Self {
             provider,
             root_hash_context,
+            runtime,
         }
     }
 }
@@ -89,6 +95,7 @@ where
             parent_state_root,
             self.root_hash_context.clone(),
             self.provider.clone(),
+            self.runtime.clone(),
         )))
     }
 }

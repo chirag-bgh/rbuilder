@@ -125,11 +125,20 @@ fn spawn_rbuilder<P>(
             )
             .await?;
 
+            let runtime = {
+                let config = reth::tasks::RuntimeConfig::default().with_tokio(
+                    reth::tasks::TokioConfig::existing_handle(tokio::runtime::Handle::current()),
+                );
+                reth::tasks::RuntimeBuilder::new(config)
+                    .build()
+                    .map_err(|e| eyre::eyre!("failed to build reth Runtime: {e:?}"))?
+            };
             let builder = config
                 .new_builder(
                     StateProviderFactoryFromRethProvider::new(
                         provider,
                         config.base_config().live_root_hash_config()?,
+                        runtime,
                     ),
                     cancel,
                 )

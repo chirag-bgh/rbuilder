@@ -137,6 +137,7 @@ impl<ConfigType: LiveBuilderConfig>
         Ok(StateProviderFactoryFromProviderFactory::new(
             self.test_chain_state.provider_factory().clone(),
             None,
+            reth::tasks::Runtime::test(),
         ))
     }
 

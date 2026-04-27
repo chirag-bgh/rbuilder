@@ -292,6 +292,7 @@ impl BaseConfig {
     pub fn create_reth_provider_factory(
         &self,
         skip_root_hash: bool,
+        runtime: reth::tasks::Runtime,
     ) -> eyre::Result<ProviderFactoryReopener<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>>
     {
         create_provider_factory(
@@ -305,6 +306,7 @@ impl BaseConfig {
             } else {
                 Some(self.live_root_hash_config()?)
             },
+            runtime,
         )
     }
 
@@ -560,6 +562,7 @@ pub fn create_provider_factory(
     chain_spec: Arc<ChainSpec>,
     rw: bool,
     root_hash_config: Option<RootHashContext>,
+    runtime: reth::tasks::Runtime,
 ) -> eyre::Result<ProviderFactoryReopener<NodeTypesWithDBAdapter<EthereumNode, Arc<DatabaseEnv>>>> {
     // shellexpand the reth datadir
     let reth_datadir = if let Some(reth_datadir) = reth_datadir {
@@ -608,6 +611,7 @@ pub fn create_provider_factory(
         reth_static_files_path,
         reth_rocksdb_path,
         root_hash_config,
+        runtime,
     )?;
 
     if provider_factory_reopener
@@ -739,6 +743,7 @@ mod test {
                 Default::default(),
                 true,
                 None,
+                reth::tasks::Runtime::test(),
             );
 
             if *should_succeed {

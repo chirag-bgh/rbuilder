@@ -209,6 +209,7 @@ impl TestChainState {
             None,
             RootHashContext::new(true, false, None, V2),
             provider_factory.clone(),
+            reth::tasks::Runtime::test(),
         ));
 
         let ctx = TestBlockContextBuilder::new(

@@ -124,6 +124,7 @@ where
 fn calculate_parallel_root_hash<P>(
     outcome: &BundleState,
     provider: P,
+    runtime: &Runtime,
 ) -> Result<B256, ParallelStateRootError>
 where
     P: DatabaseProviderFactory<
@@ -146,7 +147,7 @@ where
         TrieInput::from_state(hashed_post_state)
             .prefix_sets
             .freeze(),
-        Runtime::test(),
+        runtime.clone(),
     );
     parallel_root_calculator.incremental_root()
 }
@@ -160,6 +161,7 @@ pub fn calculate_state_root<P>(
     shared_cache: &SparseTrieSharedCache,
     local_cache: &mut SparseTrieLocalCache,
     config: &RootHashContext,
+    runtime: &Runtime,
 ) -> Result<B256, RootHashError>
 where
     P: DatabaseProviderFactory<
@@ -189,10 +191,10 @@ where
         if let Some(thread_pool) = &config.thread_pool {
             thread_pool
                 .rayon_pool
-                .install(|| calculate_parallel_root_hash(outcome, provider.clone()))
+                .install(|| calculate_parallel_root_hash(outcome, provider.clone(), runtime))
                 .map_err(|err| RootHashError::Other(err.into()))?
         } else {
-            calculate_parallel_root_hash(outcome, provider.clone())
+            calculate_parallel_root_hash(outcome, provider.clone(), runtime)
                 .map_err(|err| RootHashError::Other(err.into()))?
         }
     } else {
@@ -221,7 +223,7 @@ where
             }
         }
     } else {
-        calculate_parallel_root_hash(outcome, provider.clone())
+        calculate_parallel_root_hash(outcome, provider.clone(), runtime)
             .map_err(|err| RootHashError::Other(err.into()))?
     };
 

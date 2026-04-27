@@ -234,6 +234,7 @@ mod tests {
             test_context.provider_factory().clone(),
             std::path::PathBuf::new(),
             None,
+            reth::tasks::Runtime::test(),
         )
         .unwrap();
 

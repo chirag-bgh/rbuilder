@@ -45,6 +45,7 @@ pub struct ProviderFactoryReopener<N: NodeTypesWithDB> {
     chain_spec: Arc<N::ChainSpec>,
     static_files_path: PathBuf,
     rocksdb_path: PathBuf,
+    runtime: Runtime,
     /// Patch to disable checking on test mode. Is ugly but ProviderFactoryReopener should die shortly (5/24/2024).
     testing_mode: bool,
     /// None ->No root hash (MockRootHasher)
@@ -59,26 +60,27 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
         static_files_path: PathBuf,
         rocksdb_path: PathBuf,
         root_hash_config: Option<RootHashContext>,
+        runtime: Runtime,
     ) -> RethResult<Self> {
         let rocksdb_provider = RocksDBProvider::builder(&rocksdb_path)
             .with_default_tables()
             .with_read_only(true)
             .build()?;
-        let runtime = Runtime::test();
         let provider_factory = ProviderFactory::new(
             db,
             chain_spec.clone(),
             StaticFileProvider::read_only(static_files_path.as_path()).unwrap(),
             rocksdb_provider,
-            runtime,
+            runtime.clone(),
         )?
-        .with_read_only_sync(true);
+        .with_read_only_sync(false);
 
         Ok(Self {
             provider_factory: Arc::new(Mutex::new(provider_factory)),
             chain_spec,
             static_files_path,
             rocksdb_path,
+            runtime,
             root_hash_config,
             testing_mode: false,
         })
@@ -88,6 +90,7 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
         provider_factory: ProviderFactory<N>,
         rocksdb_path: PathBuf,
         root_hash_config: Option<RootHashContext>,
+        runtime: Runtime,
     ) -> RethResult<Self> {
         let chain_spec = provider_factory.chain_spec();
         let static_files_path = provider_factory.static_file_provider().path().to_path_buf();
@@ -96,6 +99,7 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
             chain_spec,
             static_files_path,
             rocksdb_path,
+            runtime,
             root_hash_config,
             testing_mode: true,
         })
@@ -132,16 +136,15 @@ impl<N: NodeTypesWithDB + ProviderNodeTypes + Clone> ProviderFactoryReopener<N> 
                         .with_read_only(true)
                         .build()
                         .map_err(|e| eyre::eyre!("Failed to create RocksDB provider: {:?}", e))?;
-                    let runtime = Runtime::test();
                     *provider_factory = ProviderFactory::new(
                         provider_factory.db_ref().clone(),
                         self.chain_spec.clone(),
                         StaticFileProvider::read_only(self.static_files_path.as_path())
                             .unwrap(),
                         rocksdb_provider,
-                        runtime,
+                        self.runtime.clone(),
                     )?
-                    .with_read_only_sync(true);
+                    .with_read_only_sync(false);
                 }
             }
 
@@ -280,6 +283,7 @@ where
                 parent_state_root,
                 root_hash_config.clone(),
                 provider,
+                self.runtime.clone(),
             ))
         } else {
             Box::new(MockRootHasher {})
@@ -292,6 +296,7 @@ pub struct RootHasherImpl<T> {
     provider: T,
     sparse_trie_shared_cache: SparseTrieSharedCache,
     config: RootHashContext,
+    runtime: Runtime,
 }
 
 impl<T> RootHasherImpl<T> {
@@ -300,6 +305,7 @@ impl<T> RootHasherImpl<T> {
         parent_state_root: Option<B256>,
         config: RootHashContext,
         provider: T,
+        runtime: Runtime,
     ) -> Self {
         let sparse_trie_shared_cache = SparseTrieSharedCache::new_with_parent_block_data(
             parent_num_hash.hash,
@@ -310,6 +316,7 @@ impl<T> RootHasherImpl<T> {
             provider,
             config,
             sparse_trie_shared_cache,
+            runtime,
         }
     }
 }
@@ -370,6 +377,7 @@ where
             &self.sparse_trie_shared_cache,
             &mut local_ctx.root_hash_calculator,
             &self.config,
+            &self.runtime,
         )
     }
 }

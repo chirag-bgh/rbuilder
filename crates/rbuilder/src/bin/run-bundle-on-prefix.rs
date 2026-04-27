@@ -114,7 +114,7 @@ impl LandedBlockInfo {
             orders,
             self.config
                 .base_config()
-                .create_reth_provider_factory(true)?,
+                .create_reth_provider_factory(true, reth::tasks::Runtime::test())?,
         )?;
         Ok(sim_orders)
     }
@@ -155,7 +155,7 @@ impl LandedBlockInfo {
         let provider = self
             .config
             .base_config()
-            .create_reth_provider_factory(true)?;
+            .create_reth_provider_factory(true, reth::tasks::Runtime::test())?;
         let block_state = rbuilder::building::state_provider_box_into_arc(
             provider.history_by_block_hash(ctx.attributes.parent)?,
         );
